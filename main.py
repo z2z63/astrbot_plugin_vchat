@@ -38,7 +38,7 @@ class VChatPlugin:
     def __init__(self, ctx: GlobalObject) -> None:
         put_config("VChat", "启用", "enable", False, "是否启用 VChat 插件")
         put_config("VChat", "管理员", "admin", "",
-                   "输入`username`,多个管理员通过空格分隔，`username`通过/getmyusername获取")
+                   "输入`username`,多个管理员通过空格分隔，`username`通过/get_my_username获取")
         config = load_config("VChat")
         if config.get("enable", False):
             platform = WechatPlatform(my_handler)
@@ -48,12 +48,6 @@ class VChatPlugin:
             self.thread.start()
 
     def run(self, ame: AstrMessageEvent):
-        if ame.message_str.strip() == '/getmyusername':
-            return CommandResult(
-                hit=True,
-                success=True,
-                message_chain=[Plain(ame.message_obj.session_id.split("$$")[0])]
-            )
         return CommandResult(
             hit=False,
             success=False,
@@ -88,7 +82,7 @@ class VChatPlugin:
         if msg.from_.username == self.core.me.username:
             return  # 自己发的消息不处理
         assert isinstance(msg.content, model.TextContent)
-        if msg.content.content.strip() == '/getmyusername':     # 平台类插件不支持添加命令
+        if msg.content.content.strip() == '/get_my_username':     # 平台类插件不支持添加命令
             await self.core.send_msg("你的username是：" + msg.from_.username, msg.from_.username)
             return
 
