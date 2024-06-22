@@ -1,6 +1,19 @@
-import os
-import shutil
-from nakuru.entities.components import *
+import asyncio
+import base64
+import io
+import logging
+from pathlib import Path
+from threading import Thread
+
+import vchat.model as model
+from nakuru import GuildMessage, GroupMessage, FriendMessage
+from nakuru.entities.components import Plain, Image
+from vchat import Core
+
+from type.message import MessageMember
+from type.types import GlobalObject
+
+logger = logging.getLogger('astrbot_plugin_vchat')
 flag_not_support = False
 try:
     from util.plugin_dev.api.v1.config import *
@@ -8,57 +21,120 @@ try:
         AstrMessageEvent,
         CommandResult,
     )
+    from util.plugin_dev.api.v1.message import message_handler, AstrBotMessage
+    from util.plugin_dev.api.v1.register import register_platform
+    from model.platform._platfrom import Platform
+    from util.plugin_dev.api.v1.config import load_config
 except ImportError:
     flag_not_support = True
     print("导入接口失败。请升级到 AstrBot 最新版本。")
 
 
-'''
-注意改插件名噢！格式：XXXPlugin 或 Main
-小提示：把此模板仓库 fork 之后 clone 到机器人文件夹下的 addons/plugins/ 目录下，然后用 Pycharm/VSC 等工具打开可获更棒的编程体验（自动补全等）
-'''
-class HelloWorldPlugin:
-    """
-    初始化函数, 可以选择直接pass
-    """
-    def __init__(self) -> None:
-        pass
+def my_handler():
+    print("Hello, VChat!")
 
-    """
-    机器人程序会调用此函数。
-    """
+
+class VChatPlugin:
+    def __init__(self, ctx: GlobalObject) -> None:
+        put_config("VChat", "启用", "enable", False, "是否启用 VChat 插件")
+        put_config("VChat", "管理员", "admin", "", "输入`username`,多个管理员通过空格分隔，`username`通过/getmyusername获取")
+        config = load_config("VChat")
+        if config.get("enable", False):
+            platform = WechatPlatform(my_handler)
+            register_platform("wechat", platform, ctx)
+            self.admin = [i for i in config.get("admin", "").split(" ") if i != ""]
+            self.thread = Thread(target=self.vchat_run)
+            self.thread.start()
+
     def run(self, ame: AstrMessageEvent):
-        if ame.message_str.startswith("helloworld"): # 如果消息文本以"helloworld"开头
+        if ame.message_str.strip() == '/getmyusername':
             return CommandResult(
-                hit=True, # 代表插件会响应此消息
-                success=True, # 插件响应类型为成功响应
-                message_chain=[Plain("Hello World!!")], # 消息链
-                command_name="helloworld" # 指令名
+                hit=True,
+                success=True,
+                message_chain=[Plain(ame.message_obj.session_id.split("$$")[0])]
             )
         return CommandResult(
-            hit=False, # 插件不会响应此消息
+            hit=False,
             success=False,
-            message_chain=None
+            message_chain=[]
         )
-    """
-    插件元信息。
-    当用户输入 plugin v 插件名称 时，会调用此函数，返回帮助信息。
-    返回参数要求(必填)：dict{
-        "name": str, # 插件名称
-        "desc": str, # 插件简短描述
-        "help": str, # 插件帮助信息
-        "version": str, # 插件版本
-        "author": str, # 插件作者
-        "repo": str, # 插件仓库地址 [ 可选 ]
-        "homepage": str, # 插件主页  [ 可选 ]
-    }
-    """
+
     def info(self):
         return {
-            "name": "helloworld",
-            "desc": "这是 AstrBot 的默认插件，支持关键词回复。",
+            "plugin_type": "platform",
+            "name": "VChat",
+            "desc": "通过VChat让AstrBot支持微信",
             "help": "输入 /keyword 查看关键词回复帮助。",
-            "version": "v1.3",
-            "author": "Soulter",
-            "repo": "https://github.com/Soulter/helloworld"
+            "version": "v0.1",
+            "author": "z2z63",
+            "repo": "https://github.com/z2z63/VChat"
         }
+
+    def vchat_run(self):
+        asyncio.run(self.vchat_async_run())
+
+    async def vchat_async_run(self):
+        self.core = Core()
+        await self.core.init()
+        await self.core.auto_login(hot_reload=True, enable_cmd_qr=True)
+        await self.core.send_msg("Hello, filehelper", to_username="filehelper")
+        self.core.msg_register(
+            msg_types=model.ContentTypes.TEXT, contact_type=model.ContactTypes.USER | model.ContactTypes.CHATROOM
+        )(self.vchat_handle_message)
+        await self.core.run()
+
+    async def vchat_handle_message(self, msg: model.Message):
+        assert isinstance(msg.content, model.TextContent)
+        if msg.content.content == "/getmyusername":
+            await self.core.send_msg(msg.from_.username, msg.from_.username)
+            return
+        amsg = AstrBotMessage()
+        amsg.message = [Plain(msg.content.content)]
+        amsg.sender = MessageMember(msg.from_.username)
+        amsg.message_str = msg.content.content
+        session_id = msg.from_.username + "$$" + msg.to.username
+        role = "admin" if msg.from_.username in self.admin else "member"
+        result = await message_handler(
+            message=amsg,
+            platform="wechat",
+            session_id=session_id,
+            role=role,
+        )
+        if result is None:
+            return
+        if isinstance(result.result_message, str):
+            await self.core.send_msg(result.result_message, msg.from_.username)
+            return
+        plain_text = ""
+        for i in result.result_message:
+            if isinstance(i, Plain):
+                plain_text += i.text
+            elif isinstance(i, Image):
+                if i.path is not None:
+                    image_path = i.path
+                    await self.core.send_image(msg.from_.username, Path(image_path))
+                else:
+                    image_bytes = base64.b64decode(i.file[9:])
+                    image = io.BytesIO(image_bytes)
+                    await self.core.send_image(msg.from_.username, fd=image)
+
+        if plain_text != "":
+            await self.core.send_msg(plain_text, msg.from_.username)
+
+
+class WechatPlatform(Platform):
+    def __init__(self, message_handler: callable):
+        super().__init__(message_handler)
+        print(message_handler)
+
+    async def reply_msg(self):
+        print("reply_msg")
+
+    async def handle_msg(self):
+        print("handle_msg")
+
+    async def send(self, target: Union[GuildMessage, GroupMessage, FriendMessage, str], message: Union[str, list]):
+        print("send")
+
+    async def send_msg(self, target: Union[GuildMessage, GroupMessage, FriendMessage, str], message: Union[str, list]):
+        print("send_msg")
