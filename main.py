@@ -10,7 +10,7 @@ from nakuru import GuildMessage, GroupMessage, FriendMessage
 from nakuru.entities.components import Plain, Image
 from vchat import Core
 
-from type.message import MessageMember
+from type.message import MessageMember, MessageType
 from type.types import GlobalObject
 
 logger = logging.getLogger('astrbot_plugin_vchat')
@@ -37,7 +37,8 @@ def my_handler():
 class VChatPlugin:
     def __init__(self, ctx: GlobalObject) -> None:
         put_config("VChat", "启用", "enable", False, "是否启用 VChat 插件")
-        put_config("VChat", "管理员", "admin", "", "输入`username`,多个管理员通过空格分隔，`username`通过/getmyusername获取")
+        put_config("VChat", "管理员", "admin", "",
+                   "输入`username`,多个管理员通过空格分隔，`username`通过/getmyusername获取")
         config = load_config("VChat")
         if config.get("enable", False):
             platform = WechatPlatform(my_handler)
@@ -76,7 +77,7 @@ class VChatPlugin:
     async def vchat_async_run(self):
         self.core = Core()
         await self.core.init()
-        await self.core.auto_login(hot_reload=True, enable_cmd_qr=True)
+        await self.core.auto_login(hot_reload=False, enable_cmd_qr=True)
         await self.core.send_msg("Hello, filehelper", to_username="filehelper")
         self.core.msg_register(
             msg_types=model.ContentTypes.TEXT, contact_type=model.ContactTypes.USER | model.ContactTypes.CHATROOM
@@ -84,14 +85,23 @@ class VChatPlugin:
         await self.core.run()
 
     async def vchat_handle_message(self, msg: model.Message):
+        if msg.from_.username == self.core.me.username:
+            return  # 自己发的消息不处理
         assert isinstance(msg.content, model.TextContent)
-        if msg.content.content == "/getmyusername":
-            await self.core.send_msg(msg.from_.username, msg.from_.username)
+        if msg.content.content.strip() == '/getmyusername':     # 平台类插件不支持添加命令
+            await self.core.send_msg("你的username是：" + msg.from_.username, msg.from_.username)
             return
+
         amsg = AstrBotMessage()
         amsg.message = [Plain(msg.content.content)]
-        amsg.sender = MessageMember(msg.from_.username)
+        amsg.sender = MessageMember(msg.from_.username, msg.from_.nickname)
         amsg.message_str = msg.content.content
+        amsg.message_id = msg.message_id
+        if msg.from_.username.startswith('@@'):
+            amsg.type = MessageType.GROUP_MESSAGE
+        elif msg.from_.username.startswith('@'):
+            amsg.type = MessageType.FRIEND_MESSAGE
+
         session_id = msg.from_.username + "$$" + msg.to.username
         role = "admin" if msg.from_.username in self.admin else "member"
         result = await message_handler(
