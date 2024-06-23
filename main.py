@@ -83,7 +83,8 @@ class VChatPlugin:
             return  # 自己发的消息不处理
         assert isinstance(msg.content, model.TextContent)
         if msg.content.content.strip() == '/get_my_username':     # 平台类插件不支持添加命令
-            await self.core.send_msg("你的username是：" + msg.from_.username, msg.from_.username)
+            send_from = msg.chatroom_sender or msg.from_    # 处理群聊中获取username
+            await self.core.send_msg("你的username是：" + send_from.username, msg.from_.username)
             return
 
         amsg = AstrBotMessage()
